@@ -406,5 +406,10 @@ C++20 부터는 표준으로 지원하기도 합니다. [std::countr_zero](https
 - SIMD 를 활용하는 방식은 연산에 한정되어있지 않고, 데이터를 찾아내는 것에도 유용하다는 것을 알 수 있었습니다.
 - Pseudo-SIMD 는 하드웨어에 종속되어 있지 않으니 도입이 쉬워 많은 곳에서 활용할 수 있겠습니다.
 
+<p align="center">
+    <a href="https://theintrance.github.io/blazing.cpp/">
+        <img src="https://theintrance.github.io/blazing.cpp/assets/banner.svg" alt="Scalar vs SIMD" width="100%"/>
+    </a>
+</p>
 
 [@ashvardanian]: https://ashvardanian.com

@@ -253,6 +253,11 @@ SIMD 라는 기술 특성 상 적용할 수 있는 경우가 한정되어있기�
 - SIMD 는 아주 강력한 기능이지만 그 사용처가 한정되어있고 최적화가 필요할 때 후순위가 되는 경우가 많다는 것도 알 수 있었습니다.
 - 사용하기 어렵고 제약이 따르는 기능인 만큼 현업에서는 프로젝트의 목적과 크기, 팀의 규모 등 여러 요소를 고려하여 사용 여부를 결정하는게 중요합니다.
 
+<p align="center">
+    <a href="https://theintrance.github.io/blazing.cpp/">
+        <img src="https://theintrance.github.io/blazing.cpp/assets/banner.svg" alt="Scalar vs SIMD" width="100%"/>
+    </a>
+</p>
 
 [@ashvardanian]: https://ashvardanian.com
 
