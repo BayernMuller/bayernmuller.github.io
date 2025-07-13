@@ -1,0 +1,174 @@
+---
+title: 'Vrew—웹 기반 영상 편집 앱 분석, 그리고 더 빠르게 만들기'
+description: '웹에서 동영상을 어떻게 편집하는거야?'
+pubDate: 'Feb 14 2024'
+heroImage: '/thumbnails/vrew.webp'
+categories: ['Project', 'Korean']
+authors: ['jayden']
+tags: ['video', 'c++', 'FFmpeg']
+---
+
+최근에 영상 편집에 관심이 생겨 vrew 라는 앱을 알게되었습니다.
+
+vrew 는 동영상을 넣으면 소리를 인식해 자막을 자동으로 달아주는 영상 편집 툴 인데요, 이 툴의 데모 버전을 브라우저에서 체험해 볼 수 있었습니다.
+
+데모에서 자막 달기, 효과 넣기, 편집 중인 내용 프리뷰 등, 완성된 결과물을 파일의 형태로 뽑아내는 것 빼고 전부 가능했습니다. 브라우저에서 이게 가능하다니 신기했습니다.
+
+이걸 어떻게 만든걸까, 원리가 궁금해져서 수박 겉핥기 식이지만 나름 분석을 해보았습니다.
+
+## 데스크탑 앱
+
+데스크탑 앱을 설치했고, 웹에서 보이던 모습 그대로 확인할 수 있었습니다. 우선 vrew 프로세스에 대한 정보를 확인해보겠습니다.
+
+![](/assets/vrew-electron.webp)
+
+여러 Helper 들과 Electron 에서 볼 수 있는 CLI 옵션들이 보이네요. Electron 을 사용한 것이 확실해 보입니다.
+
+요즘은 Qt 같은 크로스플랫폼 프레임워크나 Native GUI 보다 이런 웹 기반 앱이 훨씬 많네요.
+
+웹으로 개발하면 웹에서도 돌리고, Electron 을 이용해 데스크탑 앱도 만들고, 모바일에서는 웹뷰로 앱까지 만드는 등 정말 많은 것을 할 수 있는 것 같습니다.
+
+
+## Video Export
+데스크탑 앱을 실행하니 ffmpeg 를 설치해야한다는 메세지가 떴고 설치 버튼을 누르니 설치까지 진행이 되었습니다.
+그럼, Export 를 시작하고 vrew 가 ffmpeg 를 어떤식으로 사용하는지 확인 해보겠습니다.
+
+```bash
+while [ 1 ]
+do
+    process=$(ps -ef | grep ffmpeg | grep -v grep)
+    echo "$process" | grep -oE 'ffmpeg(.*)$' | grep -v grep >> $LOG
+    sleep 0.01
+done
+```
+
+정말 무식하게 계속 반복하며 ffmpeg 를 어떤식으로 실행하는지 확인하는 스크립트입니다. 이 스크립트를 실행 해두고 vrew 에서 Export 를 시작합니다.
+
+![](/assets/vrew-ffmpeg-log.webp)
+
+Export 가 완료되니 로그가 엄청 쌓여있습니다.
+/private/var/folders 에 임시 사진들과 음악, 동영상을 저장한 뒤 ffmpeg 을 이용하여 최종 결과물을 만드는 것 같네요. 스크립트를 수정하여 저 순간에 임시 파일들도 한번 가져와보겠습니다.
+
+```bash
+... | grep -oE '/private/var/folders/[^ ]+\.(mov|mp4|png|jpeg)'
+```
+
+정규식으로 커맨드에서 임시 파일의 경로를 가져와 제 workspace 로 복사하겠습니다.
+
+![](/assets/vrew-temp-files.webp)
+
+여러가지 파일이 가져와졌습니다.
+
+동영상 클립, 사진 파일, 소리만 들어있는 mov 파일, 애니메이션을 적용한 자막의 각 프레임들도 보이네요.
+
+![](/assets/vrew-animation.gif)
+
+이제 어떤식으로 최종 동영상을 렌더링 하는지 원리를 알게되었습니다. 그렇다면 웹 기반 프로그램에서 이 임시 파일들은 어떻게 만드는걸까요?
+
+## HTML+JS 웹 페이지를 미디어 파일로
+
+vrew 는 웹 기반이니 html + js 로 보이는 화면을 사진의 형태로 만들것으로 추측을 해보았는데요, 그래서 웹 페이지를 다른 형태의 미디어로 뽑아내는 방법에 대해 찾아보았습니다.
+
+<script src="https://tarptaeya.github.io/repo-card/repo-card.js"></script>
+<div style="display: flex; justify-content: center;">
+  <div class="repo-card" data-repo="dtinth/html5-animation-video-renderer" style="width: 400px;"></div>
+</div>
+
+dtinth 라는 분의 웹 페이지를 동영상으로 변환해주는 프로젝트를 찾았습니다. 동작 원리는 이렇습니다.
+
+1. 웹 페이지를 gsap JS 애니메이션 라이브러리를 사용해 구현한다.
+2. puppeteer 를 사용해 headless 브라우저를 열고 웹 페이지로 들어간다.
+3. 콘솔에서 seekToFrame 함수를 호출해 특정 프레임으로 이동한다.
+4. Web API 를 통해 브라우저를 캡쳐한다.
+5. 3~4 과정을 모든 프레임에 대해 수행하고 ffmpeg 를 이용해 사진들을 동영상으로 만든다.
+
+위 방법을 통해 웹 페이지를 미디어 형태로 변환할 수 있다는것을 알게되었습니다. 하지만 vrew 에서도 동일한 방식을 사용할지는 미지수입니다. 브라우저 연다는 것이 부담이 되는 작업이라, 다른 방법을 사용할지도 모르겠습니다.
+
+vrew 에서 사용하는 라이브러리 리스트를 확인할 수 있다면 좀 더 단서가 나올 것 같지만 찾아봐도 잘 안나와서 명확한 답을 찾을 수는 없었습니다. 아쉽네요. 😤
+
+## Export 를 빠르게
+
+앞서 vrew 가 Export 를 어떻게 수행하는지 알아보았는데요, 다른 버전의 ffmpeg 를 사용하는 것도 가능하겠다는 생각이 들었습니다.
+
+<p align="center">
+  <img src="/assets/vrew-ffmpeg-format.webp" alt="vrew ffmpeg format"/>
+</p>
+
+vrew 의 ffmpeg 경로를 찾아가보니 두개의 프로그램을 찾았습니다. 하나는 vrew 개발사인 VoyagerX에서 커스텀한 파일 (vgx_v5), 하나는 lgpl 라이센스 하에서 빌드한 파일로 보입니다.
+
+그런데 두 파일 모두 x86_64 로 빌드되어있습니다.
+
+저는 Apple M2 를 사용중이라 CPU 아키텍쳐가 맞지 않는데요, Rosetta 를 사용해 실행을 하나봅니다.
+
+Rosetta는 Apple이 개발한 기술로, ARM 아키텍처 기반의 Apple Silicon (M1, M2 등) 프로세서에서 Intel x86 아키텍처 기반의 애플리케이션을 실행할 수 있게 해줍니다. 이는 애플리케이션의 실시간 변환을 통해 새로운 Mac 시스템에서도 기존 소프트웨어의 호환성을 유지합니다.
+
+하지만 Rosetta를 사용하여 Intel 기반 애플리케이션을 Apple Silicon Mac에서 실행할 때는 성능 손실이 발생할 수 있습니다.
+
+그럼 이걸 Native 빌드 된 ffmpeg 로만 바꿔도 성능 향상 효과가 있지 않을까요? wrapping script 를 하나 만들어 테스트 해보겠습니다.
+
+```bash
+#!/bin/bash
+
+function now()
+{
+    python3 -c "import time; print(int(time.time() * 1000000000))"
+}
+
+PROGRAM=$(basename "$0")
+NATIVE_FLAG=/tmp/ffmpeg_native_flag
+
+if [ -f $NATIVE_FLAG ]; then
+    PROGRAM=/opt/homebrew/bin/$PROGRAM
+else
+    PROGRAM="/Users/jayden/Library/Application Support/vrew/ffmpeg_gpl_vgx_v5/$PROGRAM.bak"
+fi
+
+begin_time=$(now)
+"$PROGRAM" "$@"
+end_time=$(now)
+
+run_time=$((end_time - begin_time))
+echo "$run_time for $PROGRAM $(echo "$*" | xargs)" >> /tmp/ffmpeg_run_time.log
+```
+
+기존 vrew 디렉토리에 있던 ffmpeg 를 ffmpeg.bak 으로 이름을 바꾸고, 위 스크립트의 이름을 ffmpeg 로 저장했습니다.
+
+이제 시스템에 /tmp/ffmpeg_native_flag 파일이 있으면 homebrew 로 설치한 ARM64 용 ffmpeg 가 불리고 그렇지 않다면 vrew 에서 제공하는 x86_64 용 ffmpeg가 사용됩니다.
+
+아래는 테스트 결과입니다.
+
+![](/assets/vrew-benchmark.webp)
+
+유의미한 변화가 있었습니다. Vrew 에서 설치한 ffmpeg 보다 약 2배 가까운 성능 개선이 있었습니다.
+
+물론 테스트 중에 여러 변인이 있기 때문에 절대적인 벤치마크 수치라고 보기는 힘들지만 항상 ARM64 용 ffmpeg 가 빨랐던 것은 확실했습니다.
+
+## ffmpeg 변경에따른 위험성
+
+ffmpeg를 조정함으로써 Vrew의 렌더링 속도를 향상시켜 보았습니다. 현재까지는 문제가 없었지만, 앞으로 이러한 변경이 문제를 일으킬 가능성이 있음을 인지해야합니다.
+
+Vrew를 개발한 VoyagerX가 직접 커스텀 ffmpeg를 빌드하고 배포했기 때문에, 우리가 모르는 추가 기능들이 포함되어 있을 수 있습니다. 이러한 기능이 Vrew의 동영상 빌드에 필수적인 경우, 변경한 ffmpeg로 인해 문제가 발생할 수 있습니다.
+
+또한, ffmpeg의 라이센스 요구사항 때문에 커스텀 빌드가 필요했을 가능성도 있습니다. 특정 시스템에 최적화된 부분이 있을 수 있으며, 우리가 알지 못하는 여러 가지 요소들로 인해 주의 깊게 사용해야 할 필요가 있습니다.
+
+## Vrew 를 빠르게하는 패치
+
+Apple Silicon 을 사용하는 분들을 위해 스크립트 하나만 수행하면 렌더링 속도가 개선되도록 ffmpeg 를 교체하는 방법을 공유합니다.
+
+<script src="https://tarptaeya.github.io/repo-card/repo-card.js"></script>
+<div style="display: flex; justify-content: center;">
+  <div class="repo-card" data-repo="bayernmuller/vroom" style="width: 400px;"></div>
+</div>
+
+```bash
+curl -s https://raw.githubusercontent.com/BayernMuller/vroom/main/vroom.sh | bash
+```
+
+위 스크립트를 통해 Apple Silicon 에서 x86_64 FFmpeg 을 ARM64 로 교체할 수 있습니다.
+이제 빠른 환경에서 영상편집을 더 기분좋게 할 수 있겠네요.
+
+## 정리
+
+1. 영상 편집 툴인 vrew 의 작동 원리에 대해서 분석했습니다.
+2. 웹 기반의 영상 편집 툴이 어떻게 미디어 파일을 만들어내는지 추측했습니다.
+3. Apple Silicon 에 한정하여 더 빠르게 vrew 를 사용할 수 있는 방법을 찾고 패치를 만들었습니다.
