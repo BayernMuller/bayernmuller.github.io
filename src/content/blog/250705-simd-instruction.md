@@ -1,5 +1,5 @@
 ---
-title: 'SIMD Instruction ⏩'
+title: 'SIMD Instruction'
 description: 'Single Instruction, Multiple Data.'
 pubDate: 'Jul 05 2025'
 heroImage: '/thumbnails/simd.png'
