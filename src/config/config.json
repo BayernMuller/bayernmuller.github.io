@@ -1,13 +1,13 @@
 {
   "site": {
-    "title": "Bayernmuller",
+    "title": "Jayden Yang",
     "base_url": "https://bayernmuller.github.io",
     "base_path": "/",
     "favicon": "/favicon.png",
     "logoLight": "https://github.com/BayernMuller.png",
     "logoDark": "https://github.com/BayernMuller.png",
     "lang": "en",
-    "description": "Software Engineer.",
+    "description": "Tech blog",
     "pageSize": 6
   },
   "features": {
@@ -16,11 +16,11 @@
   },
   "metadata": {
     "meta_author": "Jayden Yang @BayernMuller",
-    "meta_description": "Software Engineer."
+    "meta_description": "Tech blog"
   },
   "author": {
-    "name": "Jayden Yang @BayernMuller",
+    "name": "Jayden Yang",
     "avatar": "https://github.com/BayernMuller.png",
-    "bio": "Software Engineer."
+    "bio": "Software Engineer. @BayernMuller"
   }
 }
