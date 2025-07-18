@@ -26,8 +26,8 @@ module.exports = {
               'border-radius': '0.5rem',
             },
             code: {
-              'background-color': 'rgb(var(--color-code-bg))',
-              color: 'rgb(var(--color-code-text))',
+              'background-color': '#f8f9fa',
+              color: '#24292f',
               padding: '0.25rem 0.5rem',
               'border-radius': '0.25rem',
               'font-size': '0.875rem',
@@ -39,7 +39,7 @@ module.exports = {
             },
             li: {
               'margin-bottom': '0.5rem',
-              color: 'rgb(var(--color-code-text))',
+              color: '#24292f',
               'font-size': '1rem',
               'line-height': '1.5',
               'font-family': "Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace",

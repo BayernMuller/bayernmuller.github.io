@@ -29,6 +29,25 @@
   }
 }
 
+/* 코드블럭 강제 밝은 테마 - 모든 우선순위 덮어쓰기 */
+.prose pre,
+pre,
+.shiki {
+  background-color: #f8f9fa !important;
+  background: #f8f9fa !important;
+  border: 1px solid #e9ecef !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+}
+
+.prose pre code,
+pre code,
+.shiki code,
+.shiki span {
+  background-color: transparent !important;
+  background: transparent !important;
+  color: #24292f !important;
+}
+
 .video-wrapper {
   aspect-ratio: 16 / 9;
 }
