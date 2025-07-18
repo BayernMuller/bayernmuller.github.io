@@ -17,7 +17,7 @@ export default defineConfig({
   markdown: {
     drafts: true,
     shikiConfig: {
-      theme: 'github-light',
+      theme: 'min-light',
       wrap: true,
     },
   },
@@ -25,10 +25,13 @@ export default defineConfig({
     mdx({
       syntaxHighlight: 'shiki',
       shikiConfig: {
-        theme: 'github-light',
+        theme: 'min-light',
         wrap: true,
       },
       drafts: true,
+      components: {
+        pre: './src/components/mdx/Code.astro',
+      },
     }),
     compressor({ gzip: true, brotli: true }),
     sitemap(),
