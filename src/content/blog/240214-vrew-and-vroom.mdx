@@ -8,6 +8,8 @@ authors: ['jayden']
 tags: ['video', 'c++', 'FFmpeg']
 ---
 
+import Bookmark from '../../components/Bookmark.astro';
+
 최근에 영상 편집에 관심이 생겨 vrew 라는 앱을 알게되었습니다.
 
 vrew 는 동영상을 넣으면 소리를 인식해 자막을 자동으로 달아주는 영상 편집 툴 인데요, 이 툴의 데모 버전을 브라우저에서 체험해 볼 수 있었습니다.
@@ -69,10 +71,7 @@ Export 가 완료되니 로그가 엄청 쌓여있습니다.
 
 vrew 는 웹 기반이니 html + js 로 보이는 화면을 사진의 형태로 만들것으로 추측을 해보았는데요, 그래서 웹 페이지를 다른 형태의 미디어로 뽑아내는 방법에 대해 찾아보았습니다.
 
-<script src="https://tarptaeya.github.io/repo-card/repo-card.js"></script>
-<div style="display: flex; justify-content: center;">
-  <div class="repo-card" data-repo="dtinth/html5-animation-video-renderer" style="width: 400px;"></div>
-</div>
+<Bookmark url="https://github.com/dtinth/html5-animation-video-renderer" />
 
 dtinth 라는 분의 웹 페이지를 동영상으로 변환해주는 프로젝트를 찾았습니다. 동작 원리는 이렇습니다.
 
@@ -155,10 +154,7 @@ Vrew를 개발한 VoyagerX가 직접 커스텀 ffmpeg를 빌드하고 배포했�
 
 Apple Silicon 을 사용하는 분들을 위해 스크립트 하나만 수행하면 렌더링 속도가 개선되도록 ffmpeg 를 교체하는 방법을 공유합니다.
 
-<script src="https://tarptaeya.github.io/repo-card/repo-card.js"></script>
-<div style="display: flex; justify-content: center;">
-  <div class="repo-card" data-repo="bayernmuller/vroom" style="width: 400px;"></div>
-</div>
+<Bookmark url="https://github.com/BayernMuller/vroom" />
 
 ```bash
 curl -s https://raw.githubusercontent.com/BayernMuller/vroom/main/vroom.sh | bash
