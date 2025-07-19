@@ -1,0 +1,243 @@
+---
+title: 'Vector Cosine Distance in JavaScript'
+description: 'Various methods to calculate cosine distance in JavaScript'
+pubDate: 'Jul 19 2025'
+heroImage: '/thumbnails/floating-vectors.png'
+categories: ['blazing.cpp', 'Korean']
+authors: ['jayden']
+tags: ['JavaScript', 'NAPI', 'WebAssembly', 'Performance']
+---
+
+import Bookmark from '../../components/Bookmark.astro';
+
+RAG 는 지난 몇년 간 LLM 이 대용량 데이터를 받아드리기 위한 방법으로 각광받았습니다.
+
+벡터화된 텍스트들을 가지고있다가, 전혀 다른 텍스트가 주어졌을 때 해당 텍스트의 벡터와 제일 가까운 거리의 벡터를 찾아 프롬프트에 추가하는 방식이죠.
+
+두 벡터 간 거리를 구하는 방법 중 제일 흔하게 사용되는 방법은 코사인 거리를 이용하는 방법입니다.
+
+오늘은 [@ashvardanian] 이 작성한 [Accelerating JavaScript arrays by 10x for Vector Search 🏹](https://ashvardanian.com/posts/javascript-ai-vector-search/) 를 참고하여 여러 방법으로 Javascript 에서 코사인 유사도를 계산해보겠습니다.
+
+*(단어들을 어떻게 벡터화 하는지는 [이 문서](https://theintrance.github.io/deep-learning-specialization/ko/5_시퀀스_모델/15_자연어_처리_및_단어_임베딩/01_단어_표현/)를 참고하세요)*
+
+## Array, TypedArray
+
+자바스크립트에는 두가지 종류의 배열이 있습니다.
+
+`Array` 는 자바스크립트에서 기본적으로 제공하는 배열이고, `TypedArray` 는 특정 타입의 데이터를 저장하는 배열입니다.
+
+`TypedArray` 는 모든 요소의 데이터 타입이 동일하므로, 메모리 상 연속적으로 저장되어있습니다.
+    - `Float32Array`
+    - `Float64Array`
+    - `Int8Array`
+    - `Int16Array`
+    - `Int32Array`
+    - `Uint8Array`
+    - `Uint16Array`
+    - `Uint32Array`
+    - ...
+
+메모리 상 연속적으로 배치되어있다는 것은 곧 CPU 캐시 Hit rate 가 높아진다는 것을 의미합니다. 공간 지역성 때문에 한번 접근 한 데이터 근처에 있는 데이터도 빠르게 접근할 수 있기 때문입니다.
+
+이제 코사인 거리를 두 배열 타입으로 계산해보겠습니다.
+
+```js
+import benchmark from 'benchmark';
+
+function cosineDistance(a, b) {
+    let dotProduct = 0;
+    let magA = 0;
+    let magB = 0;
+    for (let i = 0; i < a.length; i++) {
+        dotProduct += a[i] * b[i];
+        magA += a[i] * a[i];
+        magB += b[i] * b[i];
+    }
+    return 1 - (dotProduct / (Math.sqrt(magA) * Math.sqrt(magB)));
+}
+
+const size = 1536;
+const array1 = Array.from({ length: size }, () => Math.random());
+const array2 = Array.from({ length: size }, () => Math.random());
+const floatArray1 = new Float32Array(array1);
+const floatArray2 = new Float32Array(array2);
+
+const suite = new benchmark.Suite();
+suite
+    .add('Array of Numbers', () => {
+        cosineDistance(array1, array2);
+    })
+    .add('TypedArray of Float32', () => {
+        cosineDistance(floatArray1, floatArray2);
+    })
+    .on('cycle', (event) => {
+        console.log(String(event.target));
+    })
+    .on('complete', () => {
+        console.log('Fastest is ' + suite.filter('fastest').map('name'));
+    })
+    .run({ noCache: true, async: false });
+```
+
+```text
+Array of Numbers x 684,797 ops/sec ±0.94% (102 runs sampled)
+TypedArray of Float32 x 577,195 ops/sec ±0.86% (102 runs sampled)
+Fastest is Array of Numbers
+```
+
+예상 외의 결과가 나왔습니다.
+
+`Array` 가 `TypedArray` 보다 더 빠르게 동작하는 것을 볼 수 있습니다.
+
+메모리 효율성에서는 `TypedArray` 가 더 좋겠지만, 왜인지 더 느리게 동작하네요.
+
+[@ashvardanian] 은 C++ 의 `std::valvector` 를 예로 들면서 잘 사용하지 않아 최적화가 충분히 되지 않은 채로 잊혀진 것이라 추측합니다.
+
+나름 신빙성이 있는 주장같습니다. `TypedArray` 는 `Array` 만큼의 수학 메서드가 제공되지 않거든요, 메모리 버퍼 용도로만 존재하는걸로 보입니다.
+
+하지만 쓸모는 있죠.
+
+## TypedArray 튜닝 - C/C++ 과 상호작용
+
+메모리가 연속적으로 존재한다는 사실은 많은 것을 가능하게 합니다. C/C++ 과 상호작용 하기 쉽다는 뜻입니다.
+
+코사인 거리 함수를 C99 로 구현하여 JS 에서 호출해보겠습니다.
+
+```c
+#include <math.h>
+
+float cosineDistance(float* a, float* b, int length) {
+    float dotProduct = 0.0f, magA = 0.0f, magB = 0.0f;
+    for (int i = 0; i < length; i++) {
+        dotProduct += a[i] * b[i];
+        magA += a[i] * a[i];
+        magB += b[i] * b[i];
+    }
+    return 1.0f - (dotProduct / (sqrtf(magA) * sqrtf(magB)));
+}
+```
+
+### NAPI
+
+C99 `cosineDistance` 함수를 Node.js 런타임에서 호출하는 방법 중 하나는 NAPI 를 사용하는 것입니다. NAPI 는 Node.js Addon API 라는 뜻으로, Node.js 에서 제공하는 네이티브 모듈 개발을 위한 API 입니다.
+
+즉 브라우저 엔진에 의존하지 않고 Node.js 에서 직접 호출할 수 있는 네이티브 모듈을 만들 수 있게 해줍니다.
+
+<Bookmark url="https://github.com/nodejs/node-addon-api" />
+
+```text
+Array of Numbers x 51,791 ops/sec ±0.06% (101 runs sampled)
+Native Addon (Float32Array) x 103,326 ops/sec ±1.69% (98 runs sampled)
+```
+
+NAPI 를 사용한 구현이 가장 빠른 것을 볼 수 있습니다. Array 보다 약 2배 정도 빠르네요. 엄청난 차이입니다.
+
+하지만 NAPI 는 Node.js 에 의존하기 때문에 브라우저 엔진과는 상관이 없기 때문에 브라우저에서는 사용할 수 없습니다. 그럼 브라우저에서는 어쩌죠?
+
+### WebAssembly
+
+WebAssembly 는 브라우저에서 실행되는 바이너리 코드입니다. 2015년에 등장한 기술로, C/C++/Rust 등의 언어로 로직을 구현한 뒤 WebAssembly 바이너리 코드로 컴파일하여 브라우저에서 실행할 수 있게 해줍니다.
+
+브라우저에서 실행 가능하다는 뜻은 Node.js 에서도 실행 가능하다는 의미곘죠? 벤치마크를 돌려보겠습니다.
+
+```c
+#include <math.h>
+#include <emscripten.h>
+
+EMSCRIPTEN_KEEPALIVE
+float cosineDistance(float* a, float* b, int length) {
+    float dotProduct = 0.0f, magA = 0.0f, magB = 0.0f;
+    for (int i = 0; i < length; i++) {
+        dotProduct += a[i] * b[i];
+        magA += a[i] * a[i];
+        magB += b[i] * b[i];
+    }
+    return 1.0f - (dotProduct / (sqrtf(magA) * sqrtf(magB)));
+} 
+```
+
+```makefile
+CC = emcc
+CFLAGS = \
+	-O3 \
+	-s WASM=1 \
+	-s EXPORTED_FUNCTIONS='["_cosineDistance","_malloc","_free"]' \
+	-s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s MODULARIZE=1 \
+	-s EXPORT_ES6=1 \
+	-s EXPORT_NAME='WasmModule' \
+	-s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPF32","wasmMemory"]'
+
+all: cosine_distance_wasm.wasm
+
+cosine_distance_wasm.wasm: cosine_distance_wasm.c
+	$(CC) $(CFLAGS) -o cosine_distance_wasm.js cosine_distance_wasm.c
+
+clean:
+	rm -f cosine_distance_wasm.wasm cosine_distance_wasm.js 
+```
+
+```text
+Array of Numbers x 51,791 ops/sec ±0.06% (101 runs sampled)
+Native Addon (Float32Array) x 103,326 ops/sec ±1.69% (98 runs sampled)
+WASM (Float32Array) x 105,084 ops/sec ±2.05% (96 runs sampled)
+```
+
+WASM 과 NAPI 의 차이가 거의 없네요, 대신 브라우저에서 실행된다는 점이 장점이겠습니다.
+
+## AI 는 고정밀을 원하지 않는다.
+
+Javascript 의 number 는 64비트 부동소수점 타입입니다. AI 에서는 16비트를 많이 사용하고, 심지어 8비트 정수도 자주 사용됩니다.
+
+최근 DeepSeek 가 8bit 부동소수점으로 놀라운 성능을 보여주며 대중에게 주목을 받기도 했죠.
+
+즉 그렇게 세밀한 값을 원하지 않는다는 것이죠.
+
+많은 AI 개발자들은 16비트 반정밀 부동소수점(half-precision float)을 선호합니다. 그러나 JavaScript는 이 타입을 지원하지 않습니다. 그래서 8비트 정수로 점프합니다. 0에서 1 사이의 숫자를 100배 확대한 후 정수로 변환합니다.
+
+```js
+const array1 = Array.from({ length: size }, () => Math.random() * 100);
+const array2 = Array.from({ length: size }, () => Math.random() * 100);
+```
+
+```text
+Array of Numbers x 51,791 ops/sec ±0.06% (101 runs sampled)
+Int8Array x 73,326 ops/sec ±1.69% (98 runs sampled)
+```
+
+## Multi-threading
+
+Javascript 는 싱글 스레드에서 동작합니다. 하지만 Node.js 는 아니죠. NAPI 구현에 OpenMP 를 사용하여 Multi-threading 을 벤치마크 해보겠습니다.
+
+```c
+#include <node_api.h>
+#include <math.h>
+#include <omp.h>
+
+float cosineDistance(float* a, float* b, int length) {
+    float dotProduct = 0.0f, magA = 0.0f, magB = 0.0f;
+    
+    #pragma omp parallel for reduction(+:dotProduct,magA,magB)
+    for (int i = 0; i < length; i++) {
+        dotProduct += a[i] * b[i];
+        magA += a[i] * a[i];
+        magB += b[i] * b[i];
+    }
+    
+    return 1.0f - (dotProduct / (sqrtf(magA) * sqrtf(magB)));
+}
+```
+
+```text
+Array of Numbers x 51,791 ops/sec ±0.06% (101 runs sampled)
+Native Addon + OpenMP (Float32Array) x 206,326 ops/sec ±1.32% (98 runs sampled)
+```
+
+## 마치며
+
+* 여러 방법으로 JS 에서 코사인 거리를 계산해보았습니다.
+* NAPI 와 WASM 을 사용하여 코사인 거리를 빠르게 계산할 수 있었습니다.
+* Node.js 런타임에서 OpenMP 를 사용하여 멀티 스레드 프로그래밍을 구현할 수 있었습니다.
+
+[@ashvardanian]: https://ashvardanian.com
