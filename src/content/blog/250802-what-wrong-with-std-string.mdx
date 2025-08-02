@@ -1,0 +1,424 @@
+---
+title: 'What’s Wrong with std::string'
+description: 'Problems with std::string and how to solve them'
+pubDate: 'Aug 02 2025'
+heroImage: '/thumbnails/std-string-methods.png'
+categories: ['blazing.cpp', 'Korean']
+authors: ['jayden']
+tags: ['C++', 'Performance', 'std::string']
+---
+
+import Bookmark from '../../components/Bookmark.astro';
+
+C/C++ 의 문자열 표준은 정말 오랫동안 사용되어 왔습니다. `<string>`, `<string_view>`, `<string.h>` 등 여러 헤더파일이 있고 유용한 메서드들이 많이 있는데요, 유용하게 사용해왔던건 맞지만 타 언어에 비해 지원하는 메서드나 기능이 부족한 것은 사실입니다. 
+
+이번 포수트에서는 `std::string` 의 문제점과 이를 해결하기 위한 다양한 기법들을 [@ashvardanian 의 포스트](https://ashvardanian.com/posts/painful-strings/) 를 참고하여 살펴보겠습니다.
+
+## 모호한 오버로딩
+
+`std::string` 의 `replace` 메서드의 프로토타입은 14가지나 있습니다.
+
+아래 코드를 보고 결과를 바로 알 수 있나요?
+
+```cpp
+std::string("FC Bayern Munich").replace(1, 2, "123");
+std::string("FC Bayern Munich").replace(1, 2, std::string("123"), 1);
+std::string("FC Bayern Munich").replace(1, 2, "123", 1);
+std::string("FC Bayern Munich").replace(1, 2, "123", 1, 1);
+std::string("FC Bayern Munich").replace(1, 2, std::string("123"), 1, 1);
+std::string("FC Bayern Munich").replace(1, 2, 3, 'a');
+std::string("FC Bayern Munich").replace(1, 2, {'a', 'b'});
+
+// and more..
+```
+
+아무리 경력이 많은 개발자라도 전부 알기는 힘들겠죠.
+
+아래는 결과입니다.
+
+```cpp
+std::string("FC Bayern Munich").replace(1, 2, "123");
+// F123Bayern Munich
+std::string("FC Bayern Munich").replace(1, 2, std::string("123"), 1);
+// F23Bayern Munich
+std::string("FC Bayern Munich").replace(1, 2, "123", 1);
+// F1Bayern Munich
+std::string("FC Bayern Munich").replace(1, 2, "123", 1, 1);
+// F2Bayern Munich
+std::string("FC Bayern Munich").replace(1, 2, std::string("123"), 1, 1);
+// F2Bayern Munich
+std::string("FC Bayern Munich").replace(1, 2, 3, 'a');
+// FaaaBayern Munich
+std::string("FC Bayern Munich").replace(1, 2, {'a', 'b'});
+// FabBayern Munich
+```
+
+오랜시간 표준이 업데이트 되면서 이런 오버라이딩이 쌓여왔죠. 메서드 뿐만 아니라 `std::string` 을 위한 서브클래스들도 추가되어왔습니다.
+
+- `std::string_view`
+- `std::span` 
+
+이 두 클래스는 문자열의 일부분을 참조하여 데이터 인스턴스가 중복되는 것을 방지하죠.
+
+이렇게 문자열의 일부를 표현할 수 있는 클래스들이 있음에도, 왜 여전히 `std::string` 의 메서드들은 정수기반 range 를 받는 것만 지원하는 걸까요?
+
+또, `iterator` 는 왜 사용하지 않을까요?
+
+정수도 나쁜건 아닙니다만, 중요한 것은 정수 인자들에 대한 메서드의 처리입니다.
+
+## Out of bounds 처리
+
+`std::string` 의 문자열의 특정 문자를 가져오는 메서드는 `at` 과 `operator[]` 가 있습니다.
+
+```cpp
+std::string str = "FC Bayern Munich";
+std::cout << str[0] << std::endl;
+std::cout << str.at(1) << std::endl;
+``
+```txt
+F
+C
+```
+
+두 메서드의 기능은 같아보이지만, 예외 처리에서 차이가 있습니다.
+
+```cpp
+std::string str = "FC Bayern Munich";
+std::cout << "str[2013] = " << str[2013] << std::endl;
+```
+
+```cpp
+str[2013] = // 실제로는 보이지 않지만 '\x00' 이 있음. 상황에 따라 '\x00' 이 아닌 다른 값이 있을 수 있음.
+```
+
+`operator[]` 는 인덱스가 범위를 벗어나면 undefined behavior 를 발생시킵니다. 즉 지시된 인덱스에 있는 메모리의 값을 반환합니다. 예외 처리가 없는거죠. 그렇기 때문에 빠르게 동작합니다.
+
+```cpp
+std::string str = "FC Bayern Munich";
+std::cout << "str.at(2013) = " << str.at(2013) << std::endl;
+```
+
+```txt
+libc++abi: terminating due to uncaught exception of type std::out_of_range: basic_string
+```
+
+`at` 메서드는 인덱스가 범위를 벗어나면 `std::out_of_range` 예외를 던집니다. 그렇기 떄문에 느리죠.
+
+내부적으로 `try-catch` 를 사용하여 예외 처리를 하고 있습니다.
+
+벤치마크를 돌려보면...
+
+```txt
+BM_StringOperatorBracket     714988 ns       714933 ns          980
+BM_StringAt                 1489270 ns      1489178 ns          467
+```
+
+`operator[]` 가 더 빠른 것을 확인할 수 있습니다.
+
+`at` 과 `operator[]` 의 차이가 예외 처리 여부라는 것을 알 수 있었습니다. 그럼 다른 함수는 어떨까요?
+
+```cpp
+std::string("Jamal Musiala").substr(6);
+std::string("Jamal Musiala").substr(6, 100);
+std::string("Jamal Musiala").substr(100);
+std::string("Jamal Musiala").substr(20, 5);
+std::string("Jamal Musiala").substr(-1, 5);
+std::string("Jamal Musiala").substr(0, -1);
+```
+
+`std::string::substr` 은 해당 범위의 슬라이드를 반환합니다.
+
+각 프로토타입이 예외처리를 어떻게 하는지 알 수 있나요?
+
+```cpp
+std::string("Jamal Musiala").substr(6)           = Musiala
+std::string("Jamal Musiala").substr(6, 100)      = Musiala
+std::string("Jamal Musiala").substr(100)         = std::out_of_range
+std::string("Jamal Musiala").substr(20, 5)       = std::out_of_range
+std::string("Jamal Musiala").substr(-1, 5)       = std::out_of_range
+std::string("Jamal Musiala").substr(0, -1)       = Jamal Musiala
+```
+
+그다지 일관성이 없죠. 심지어는 첫번째 인자에만 경계 체크를 하고 두번째 인자에는 경계 체크를 하지 않습니다.
+
+또한 `substr(-1, 5)` 의 경우 `-1`이 `unsigned` 로 변환되기까지 하는데 컴파일 옵션을 따로 두지 않는 한 경고도 없습니다.
+
+저도 C++ 을 주력으로 삼는 개발자이지만, 사람들이 C++ 이 복잡하다고 생각하는 이유가 이런 것들 아닐까 싶습니다.
+
+복잡한 템플릿, 모던 기법들까지 가기도 전에 이런 일관성 없고 오버로딩이 난무하는 것 부터 개발자에게 혼란을 주는 포인트가 되는 것 같습니다.
+
+`@ashvardanian` 은 이 경우 Python 의 슬라이스 문법이 직관적이라고 주장하는데요, 저도 어느정도 동의합니다. Python 에서는 아래와 같은 표현이 가능하거든요.
+
+```python
+>>> "FC Bayern Munich"[1:3]
+'C '
+>>> "Jamal Musiala"[-5:]
+'siala'
+>>> "Jamal Musiala"[-4:-2]
+'ia'
+```
+
+C++ 로 이 문법을 흉내 내자면 이렇게 할 수 있습니다.
+
+```cpp
+#include <iostream>
+#include <string>
+
+namespace jayden {
+
+class string {
+public:
+    string(const char* str) {
+        this->_str = std::string(str);
+    }
+
+    std::string operator[](std::initializer_list<int> range) const {
+        auto it = range.begin();
+        int first = *it++;
+        int second = *it;
+
+        int len = static_cast<int>(_str.length());
+        if (first < 0) first += len;
+        if (second < 0) second += len;
+        if (first > second) return "";
+
+        std::string result;
+        for (int index = first; index < second; index++) {
+            result += _str[index];
+        }
+        return result;
+    }
+
+private:
+    std::string _str;
+};
+
+string operator "" _jayden(const char* str, unsigned long)
+{
+    return string(str);
+}
+
+} // namespace jayden
+
+int main() {
+    using namespace jayden;
+    std::cout << "Jamal Musiala"_jayden[{-4, -2}] << std::endl;
+}
+```
+
+```txt
+ia
+```
+
+여러 예외 처리가 빠진 미완 코드지만, C++ 에서 `literal operator`, `std::initializer_list` 를 사용하여 파이썬을 어느정도 흉내낼 수 있었습니다.
+
+다른 기능도 살펴보겠습니다.
+
+### split
+
+```python
+>>> "FC Bayern Munich".split()
+['FC', 'Bayern', 'Munich']
+>>> "FC Bayern Munich".split("B")
+['F', 'ayern Munich']
+```
+
+split 은 delimiter 를 기준으로 문자열을 분리하는 기능입니다. Python 으로 코드를 작성하다보면 반드시 사용하게되는 유용한 함수인데요, C/C++ 에서는 어떨까요?
+
+C 표준에 `strtok` 함수가 있긴 하지만, thread-safe 하지 않습니다. 내부적으로 static 변수를 사용하기 떄문입니다.
+
+```c
+const char* str = "FC Bayern Munich";
+char* token = strtok(str, " ");
+while (token != NULL) {
+    printf("%s\n", token);
+    token = strtok(NULL, " ");
+}
+```
+
+C++ 에서는 `std::stringstream` 과 `std::getline` 을 사용하는 방법이 있습니다.
+
+```cpp
+std::stringstream ss("FC Bayern Munich");
+std::string token;
+while (std::getline(ss, token, ' ')) {
+    std::cout << token << std::endl;
+}
+```
+
+하지만 너무 번거롭고 복사도 발생해서 굉장히 느립니다.
+
+C++23 에서는 `std::ranges::views::split` 이 추가되어 복사 없는 문자열 분리가 가능해졌습니다.
+
+```cpp
+std::string text = "one,two,three,four";
+for (const char& ch : text) {
+    std::cout
+        << ch
+        << " -> "
+        << std::hex << static_cast<const void*>(&ch)
+        << std::endl;
+}
+
+for (auto part : std::ranges::views::split(text, ',')) {
+    std::cout 
+        << std::hex << static_cast<const void*>(&*part.begin()) 
+        << " -> "
+        << *part.begin()
+        << std::endl;
+}
+```
+
+```txt
+o -> 0x16f6d2850
+n -> 0x16f6d2851
+e -> 0x16f6d2852
+, -> 0x16f6d2853
+t -> 0x16f6d2854
+w -> 0x16f6d2855
+o -> 0x16f6d2856
+, -> 0x16f6d2857
+t -> 0x16f6d2858
+h -> 0x16f6d2859
+r -> 0x16f6d285a
+e -> 0x16f6d285b
+e -> 0x16f6d285c
+, -> 0x16f6d285d
+f -> 0x16f6d285e
+o -> 0x16f6d285f
+u -> 0x16f6d2860
+r -> 0x16f6d2861
+0x16f6d2850 -> o
+0x16f6d2854 -> t
+0x16f6d2858 -> t
+0x16f6d285e -> f
+```
+
+`text` 변수의 데이터가 복사되지 않고 참조 기반 `split` 이 이루어져 빨리 동작하게 되었고, 코드도 훨씬 직관적으로 작성할 수 있게 되었습니다.
+
+특수한 케이스에서 더 빠르게 동작 시킬 수 있는데, 바로 `lazy_split` 을 사용하는 겁니다.
+
+`lazy_split` 은 문자열을 한번에 분리하지 않고 필요할 때마다 분리하는 방식입니다.
+
+```cpp
+for (auto part : std::ranges::views::lazy_split(text, ',')) {
+    ...
+    if (some_condition) {
+        break;
+    }
+    ...
+}
+```
+
+이걸 사용하면 loop 중간에 탈출해야할 때 나머지 부분을 split 하지 않으므로 더 빠르게 동작할 수 있습니다.
+
+그럼 이제 여러 기능들에 대한 벤치마크를 해봅시다.
+
+```cpp
+#include <benchmark/benchmark.h>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <cstring>
+#include <boost/algorithm/string.hpp>
+#include <ranges>
+
+// Helper: stringstream split
+std::vector<std::string> split_stringstream(const std::string& s, char delim) {
+    std::vector<std::string> result;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delim)) {
+        result.push_back(item);
+    }
+    return result;
+}
+
+// Helper: strtok split
+std::vector<std::string> split_strtok(const std::string& s, char delim) {
+    std::vector<std::string> result;
+    char* cstr = new char[s.size() + 1];
+    std::strcpy(cstr, s.c_str());
+    char delim_str[2] = {delim, 0};
+    char* token = std::strtok(cstr, delim_str);
+    while (token) {
+        result.push_back(token);
+        token = std::strtok(nullptr, delim_str);
+    }
+    delete[] cstr;
+    return result;
+}
+
+// Helper: boost::algorithm::split
+std::vector<std::string> split_boost(const std::string& s, char delim) {
+    std::vector<std::string> result;
+    boost::split(result, s, boost::is_any_of(std::string(1, delim)));
+    return result;
+}
+
+std::vector<std::string> split_ranges(const std::string& s, char delim) {
+    std::vector<std::string> result;
+    auto split_view = std::ranges::views::split(s, delim);
+    for (auto&& part : split_view) {
+        result.emplace_back(std::string(part.begin(), part.end()));
+    }
+    return result;
+}
+
+static void BM_StringStream(benchmark::State& state) {
+    std::string text = "one,two,three,four,five,six,seven,eight,nine,ten";
+    for (auto _ : state) {
+        auto v = split_stringstream(text, ',');
+        benchmark::DoNotOptimize(v);
+    }
+}
+BENCHMARK(BM_StringStream);
+
+static void BM_Strtok(benchmark::State& state) {
+    std::string text = "one,two,three,four,five,six,seven,eight,nine,ten";
+    for (auto _ : state) {
+        auto v = split_strtok(text, ',');
+        benchmark::DoNotOptimize(v);
+    }
+}
+BENCHMARK(BM_Strtok);
+
+static void BM_Boost(benchmark::State& state) {
+    std::string text = "one,two,three,four,five,six,seven,eight,nine,ten";
+    for (auto _ : state) {
+        auto v = split_boost(text, ',');
+        benchmark::DoNotOptimize(v);
+    }
+}
+BENCHMARK(BM_Boost);
+
+static void BM_RangesSplit(benchmark::State& state) {
+    std::string text = "one,two,three,four,five,six,seven,eight,nine,ten";
+    for (auto _ : state) {
+        auto v = split_ranges(text, ',');
+        benchmark::DoNotOptimize(v);
+    }
+}
+BENCHMARK(BM_RangesSplit);
+
+BENCHMARK_MAIN();
+```
+
+| Benchmark         | Time (ns) | Time (ns) | Iterations |
+|-------------------|-----------|-----------|------------|
+| BM_StringStream   | 478       | 478       | 1,476,828  |
+| BM_Strtok         | 388       | 388       | 1,793,534  |
+| BM_Boost          | 537       | 537       | 1,251,385  |
+| BM_RangesSplit    | 297       | 297       | 2,401,372  |
+
+역시 참조 기반 split 이 가장 빠르고 직관적인 코드를 작성할 수 있었습니다.
+
+## 정리
+
+이처럼 C++ 표준 기능에는 유용한 것도 있고, 문제가 있는 것도 있습니다. 대형 회사들은 거의 모두 직접 해시테이블을 짜거나, 대안 오픈소스를 사용합니다.
+
+`std::string` 도 예외가 아니죠.
+
+일부 연산은 LibC를 호출하는데, LibC는 전반적으로 훨씬 최적화되어 있지만 하드웨어 성능을 완전히 뽑지 못하고, C++ 클래스가 요구하는 기능도 다 커버하지 못합니다.
+
+STL 과 C++ 표준을 맹신하지 말고, 필요한 경우 대안 오픈소스를 사용하는 거나 직접 구현하는 것도 좋은 방법이라는 것을 알 수 있었습니다.
