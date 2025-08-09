@@ -1,0 +1,202 @@
+---
+title: '10x Faster C++ String Split'
+description: 'How to split a string 10x faster in C++'
+pubDate: 'Aug 09 2025'
+heroImage: '/thumbnails/split.png'
+categories: ['blazing.cpp', 'Korean']
+authors: ['jayden']
+tags: ['C++', 'Performance', 'std::string']
+---
+
+지난 포스트들에서 SIMD 인스트럭션과 SIMD 를 string 에 활용하는 법에 대해 포스팅을 했었는데요, 오늘은 [@ashvardanian](https://ashvardanian.com/posts/splitting-strings-cpp/)의 `splitting-strings-cpp` 포스팅을 리뷰하면서 `split` 함수를 구현해보려고 합니다.
+
+특히 저의 경우 Python 에서 제일 많이 사용하는 함수 중 하나가 `split` 입니다.
+
+이 포스트에서는 문자열을 나누는 여러 방법을 살펴보고, 그 중 가장 빠른 방법과 그 구현, 장단점을 살펴보려고 합니다.
+
+## Problem Definition
+
+문제를 정의 해봅시다. `split` 은 바이트 시퀀스와 delimiter 문자 집합이 주어졌을 때, 이 delimiter 를 기준으로 문자열을 나누는 함수입니다.
+
+일반적으로 공백을 기준으로 문자열을 나누죠. C언어의 로케일에서는 `"\f"`, `"\r"`, `"\n"`, `"\t"`, `"\v"`, `" "` 의 6개 문자가 공백 문자로 정의되어 있습니다.
+
+보통 `" "` 하나만을 delimiter 로 사용하는 경우가 많습니다. 하지만 파싱을 하다 보면 XML 의 `<`, `>`, JSON 의 `{`, `}`, `[`, `]` 등의 2개 이상 문자들을 delimiter 로 사용해야 하는 경우가 있습니다.
+
+### Solution 1: using `std::string_view::find_first_of`
+
+```cpp
+template <typename callback_type_>
+void split(std::string_view str, std::string_view delimiters, callback_type_ && callback) {
+    std::size_t pos = 0;
+    while (pos < str.size()) {
+        auto const next_pos = str.find_first_of(delimiters, pos);
+        callback(str.substr(pos, next_pos - pos));
+        pos = next_pos == std::string_view::npos ? str.size() : next_pos + 1;
+    }
+}
+```
+
+`std::string_view::find_first_of` 는 문자열에서 주어진 문자 집합에 포함된 문자가 처음으로 나타나는 위치를 찾아줍니다.
+
+내부적으로 순차 탐색을 하는데, delimiters 의 길이가 늘어나면 성능이 확 떨어지죠. 
+
+굳이 시간 복잡도로 보면 `O(n * len(delimiters))` 라고 볼 수 있습니다.
+
+### Solution 2: using `std::find_if` and lambda
+
+만약 delimiter 를 판단하는 커스텀 람다 함수를 전달하면, `O(n)` 으로 해결할 수 있겠습니다.
+
+```cpp
+template <typename callback_type_, typename predicate_type_>
+void split_with_predicate(std::string_view str, predicate_type_ && is_delimiter, callback_type_ && callback) {
+    std::size_t pos = 0;
+    while (pos < str.size()) {
+        auto const next_pos = std::find_if(str.begin() + pos, str.end(), is_delimiter) - str.begin();
+        callback(str.substr(pos, next_pos - pos));
+        pos = next_pos == str.size() ? str.size() : next_pos + 1;
+    }
+}
+```
+
+#### Benchmark: solution 1 vs solution 2
+
+```cpp
+inline bool is_delimiter(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static void BM_Split(benchmark::State& state) {
+    std::string text = "This is a sample text to be split using delimiters.";
+    for (auto _ : state) {
+        split(text, " \t\n\r\f\v", [](std::string_view) {
+            benchmark::DoNotOptimize(1);
+        });
+    }
+}
+
+static void BM_SplitWithPredicate(benchmark::State& state) {
+    std::string text = "This is a sample text to be split using delimiters.";
+    for (auto _ : state) {
+        split_with_predicate(text, is_delimiter, [](std::string_view) {
+            benchmark::DoNotOptimize(1);
+        });
+
+    }
+}
+
+BENCHMARK(BM_Split);
+BENCHMARK(BM_SplitWithPredicate);
+
+BENCHMARK_MAIN();
+```
+
+
+
+| **-O0** Benchmark      | Time   | CPU   | Iterations |
+|-------------------------|--------|-------|------------|
+| BM_Split                | 1678 ns| 1678 ns| 416055     |
+| BM_SplitWithPredicate   | 569 ns | 568 ns | 1226564    |
+
+
+
+| **-O3** Benchmark       | Time   | CPU   | Iterations |
+|-------------------------|--------|-------|------------|
+| BM_Split                | 41.8 ns| 41.8 ns| 16705647   |
+| BM_SplitWithPredicate   | 37.2 ns| 37.2 ns| 18774709   |
+
+컴파일러 최적화 옵션에 따라 성능 차이가 있지만, `BM_SplitWithPredicate` 가 `BM_Split` 보다 빠르다는 것을 확인할 수 있습니다.
+
+## Solution 3: using character bit-set
+
+결국 문자열을 나누는 로직의 첫번쨰 과정은 문자열 내부의 delimiter 위치를 찾는 것이고, 문제를 더 잘게 쪼개면 문자열 내부의 문자가 delimiter 인지 아닌지를 판단하는 것입니다.
+
+문자가 delimiter 인지 아닌지를 판단하는 것을 비트 연산으로 접근해보곘습니다.
+
+```cpp
+char set[32] = {0};
+
+const char* delimiters = " \t\n\r\f\v";
+
+for (char c : std::string_view(delimiters)) {
+    set[c >> 3] |= 1 << (c & 7);
+}
+
+bool is_delimiter(char c) {
+    return set[c >> 3] & (1 << (c & 7));
+}
+```
+
+`set` 은 문자 집합을 비트 마스크로 표현한 집합입니다. 8비트 자료형인 char 가 32개 있으니, 총 256비트의 비트 마스크를 사용할 수 있습니다.
+
+즉 만약 `A` 가 delimiter 라면, 정수로 해석한 값은 65이므로 `set` 의 65번째 비트가 1이 됩니다.
+
+```cpp
+set[0] = 0b00000000;
+set[1] = 0b00000000;
+...
+set[8] = 0b10000000; // 'A'
+...
+set[31] = 0b00000000;
+```
+
+`is_delimiter` 함수는 문자를 정수로 해석한 값을 8로 나눈(`c / 8 == c >> 3`) 몫을 인덱스로 사용합니다. 그리고 나머지(`c & 7 == c % 8`) 를 비트 마스크로 사용합니다.
+
+`set` 은 메모리 지역성이 좋은 배열이므로, 캐시 히트율이 높을 것이고 정수 연산이 아닌 비트 연산을 사용하므로 더 빠를 것입니다.
+
+`==` 연산자를 반복적으로 사용하는 이전의 방법 대신 방금 구현한 비트연산 기반 함수를 사용하여 벤치마크 해보겠습니다.
+
+```cpp
+inline bool is_delimiter(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static void BM_SplitWithPredicate(benchmark::State& state) {
+    std::string text = "This is a sample text to be split using delimiters.";
+    for (auto _ : state) {
+        split_with_predicate(text, is_delimiter, [](std::string_view) {
+            benchmark::DoNotOptimize(1);
+        });
+
+    }
+}
+
+static void BM_SplitWithPredicate_CharSet(benchmark::State& state) {
+    char set[32] = {0};
+    const char* delimiters = " \t\n\r\f\v";
+
+    for (char c : std::string_view(delimiters)) {
+        set[c >> 3] |= 1 << (c & 7);
+    }
+
+    auto is_delimiter_char_set = [&](char c) {
+        return set[c >> 3] & (1 << (c & 7));
+    };
+
+    std::string text = "This is a sample text to be split using delimiters.";
+    for (auto _ : state) {
+        split_with_predicate(text, is_delimiter_char_set, [](std::string_view) {
+            benchmark::DoNotOptimize(1);
+        });
+    }
+
+}
+```
+
+| Benchmark                      | Time   | CPU   | Iterations |
+|--------------------------------|--------|-------|------------|
+| BM_SplitWithPredicate          | 44.8 ns| 44.8 ns| 15622768   |
+| BM_SplitWithPredicate_CharSet  | 32.0 ns| 32.0 ns| 21921995   |
+
+확실히 빠른 것을 알 수 있습니다.
+
+## Solution 4: using SIMD
+
+지금까지 solution 1, 2, 3 의 아이디어를 모두 종합하여 SIMD 를 사용해보겠습니다.
+
+solution 3 에서 구현한 비트 마스크 기반 비교 로직을 동시에 여러 문자에 대해 적용하면 더 빨라지겠죠? ARM NEON 기반으로 구현해보겠습니다.
+
+```cpp
+
+```
+
+http://192.168.0.3:4321/blog/250809-10x-faster-cpp-string-split
